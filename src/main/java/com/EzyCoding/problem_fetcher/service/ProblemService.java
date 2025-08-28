@@ -4,22 +4,27 @@ import com.EzyCoding.problem_fetcher.dto.ProblemDto;
 import com.EzyCoding.problem_fetcher.dto.ProblemResponse;
 import com.EzyCoding.problem_fetcher.dto.Submission;
 import com.EzyCoding.problem_fetcher.dto.SubmissionResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.beans.factory.annotation.Value;
 
+import java.util.ArrayList;
 import java.util.List;
 
-
 @Service
+@Slf4j
 public class ProblemService {
-    private static final String PROBLEM_API_URL = "https://codeforces.com/api/problemset.problems";
-    private static final String SUBMISSION_API_URL = "https://codeforces.com/api/user.status?handle=%s&from=1&count=1000";
+    @Value("${api.problem.fetch.url}")
+    String problemApiUrl;
+    @Value("${api.submission.fetch.url}")
+    String submissionApiUrl;
     @Autowired
     private RestTemplate restTemplate;
 
     public ProblemResponse getProblems() {
-        return restTemplate.getForObject(PROBLEM_API_URL, ProblemResponse.class);
+        return restTemplate.getForObject(problemApiUrl, ProblemResponse.class);
     }
 
     public ProblemDto getProblem(int contestId, String index) {
@@ -32,36 +37,32 @@ public class ProblemService {
         return null;
     }
 
-    public String getVerdictForProblem(String handle, int contestId, String index) {
-        String url = String.format(SUBMISSION_API_URL, handle);
-        SubmissionResponse response = restTemplate.getForObject(url, SubmissionResponse.class);
-
-        // Check for null or failed API response
-        if (response == null || !"OK".equals(response.getStatus())) {
-            throw new RuntimeException("Failed to fetch submissions from Codeforces API");
+    public List<Submission> getAllSubmissions (String handle) {
+        int from = 1;
+        int batchSize = 1000;
+        List <Submission> allSubmissions = new ArrayList<>();
+        List <Submission> okSubmissions = new ArrayList<>();
+        while (true) {
+            String url = String.format(submissionApiUrl, handle, from, batchSize);
+            SubmissionResponse response = restTemplate.getForObject(url, SubmissionResponse.class);
+            // Check for null or failed API response
+            if (response == null || !"OK".equals(response.getStatus())) {
+                throw new RuntimeException("Failed to fetch submissions from Codeforces API");
+            }
+            List<Submission> batch = response.getResult();
+            if (batch == null || batch.isEmpty()) {
+                if (allSubmissions.isEmpty()) {
+                    log.info("No submissions found for handle: " + handle);
+                } else {
+                    log.info("Finished fetching all submissions. Total: " + allSubmissions.size());
+                }
+                break; // stop fetching
+            }
+            allSubmissions.addAll(batch);
+            // Move to the next page
+            from += batchSize;
         }
-
-        if (response.getResult() == null || response.getResult().isEmpty()) {
-            return "NO_SUBMISSION";
-        }
-
-        // Filter submissions for the specific problem
-        List<Submission> submissions = response.getResult().stream()
-                .filter(s -> s.getProblem() != null
-                        && s.getProblem().getContestId() != null
-                        && s.getProblem().getContestId() == contestId
-                        && index.equals(s.getProblem().getIndex()))
-                .toList();
-
-        if (submissions.isEmpty()) {
-            return "NO_SUBMISSION";
-        }
-
-        // Check if any submission is OK
-        boolean okFound = submissions.stream()
-                .anyMatch(s -> "OK".equals(s.getVerdict()));
-
-        return okFound ? "OK" : "FAILED";
+        allSubmissions.removeIf(s -> !"OK".equals(s.getVerdict()));
+        return allSubmissions;
     }
-
 }
